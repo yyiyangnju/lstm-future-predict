@@ -1,0 +1,7 @@
+.idea/*
+
+dataset/*
+
+checkpoint/*
+
+stock_predict.py
