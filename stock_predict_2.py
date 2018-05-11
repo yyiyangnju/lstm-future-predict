@@ -22,6 +22,10 @@ BATCH_SIZE = 77
 lr = 0.0006  # 学习率
 
 
+def calc_rsq(y, yhat):
+    ret = 1 - ((y - yhat) ** 2).mean() / y.var()
+    return ret
+
 # 获取训练集
 def get_train_data(input_len=20, output_len=1, train_begin=0, train_end=5800, train_mode=True):
     if train_mode:
@@ -98,7 +102,7 @@ def train_lstm(batch_size=77, input_len=15, output_len=1, train_begin=2000, trai
     _, _, train_x, train_y = get_train_data(input_len, output_len, train_begin, train_end)
     pred, _ = lstm(X)
     loss = tf.reduce_mean(tf.square(tf.reshape(pred, [-1]) - tf.reshape(Y, [-1])))
-    train_op = tf.train.AdamOptimizer(lr).minimize(loss)
+    train_op = tf.train.RMSPropOptimizer(lr).minimize(loss)
 
     # Create model saver and Set dir
     saver = tf.train.Saver(tf.global_variables(), max_to_keep=15)
@@ -114,7 +118,7 @@ def train_lstm(batch_size=77, input_len=15, output_len=1, train_begin=2000, trai
             saver.restore(sess, module_file)
 
         # Continue to train from latest checkpoint
-        for i in range(10):
+        for i in range(2001):
             train_len = len(train_x)
             for start, end in zip(range(0,          train_len, batch_size),
                                   range(batch_size, train_len, batch_size)):
@@ -160,6 +164,10 @@ def prediction(input_len=20):
 
         test_y = test_y * std[7] + mean[7]
         test_predict = np.array(test_predict) * std[7] + mean[7]
+
+        rsq = calc_rsq(test_y, test_predict)
+        print("rsq = {:.5f}".format(rsq))
+
         acc = np.average(np.abs(test_predict - test_y[:len(test_predict)]) / test_y[:len(test_predict)])  # 偏差
         # 以折线图表示结果
         plt.figure()
@@ -177,7 +185,9 @@ if __name__ == "__main__":
     # store = pd.HDFStore('data/train_test_dataset', mode='r')
     # data = store['dataset']
     # store.close()
-    df.loc[:, 'label'] = df['label'].shift(-(INPUT_LEN - 1))
+    # shift_len = -(INPUT_LEN - 1 )
+    shift_len = -(INPUT_LEN - 1 )
+    df.loc[:, 'label'] = df['label'].shift(shift_len)  # -1
     data = df.dropna()
     data = data.iloc[:, 2:10].values  # 取第3-10
 
@@ -193,9 +203,9 @@ if __name__ == "__main__":
         'out': tf.Variable(tf.constant(0.1, shape=[1, ]))
     }
 
-    train_mode = True
-    # if train_mode:
-    # train_lstm(batch_size=BATCH_SIZE, input_len=INPUT_LEN)
-    # else:
-    prediction(INPUT_LEN)
+    train_mode = 0
+    if train_mode:
+        train_lstm(batch_size=BATCH_SIZE, input_len=INPUT_LEN)
+    else:
+        prediction(INPUT_LEN)
 
