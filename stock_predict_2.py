@@ -9,17 +9,6 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-# checkpoint dir
-CKPT_DIR = 'checkpoints'
-
-# 定义常量
-rnn_unit = 10  # hidden layer units
-INPUT_SIZE = 7
-OUTPUT_SIZE = 1
-INPUT_LEN = 15
-OUTPUT_LEN = 1
-BATCH_SIZE = 77
-lr = 0.0006  # 学习率
 
 
 def calc_rsq(y, yhat):
@@ -27,17 +16,18 @@ def calc_rsq(y, yhat):
     return ret
 
 # 获取训练集
-def get_train_data(input_len=20, output_len=1, train_begin=0, train_end=5800, train_mode=True):
+
+def get_train_data(input_len=20, output_len=1, train_begin=0,  train_mode=True):
+    train_end = (TOTAL_LEN // 4) * 3
     if train_mode:
         data_train = data[train_begin: train_end]
     else:
-        data_train = data[train_begin: ]
+        data_train = data[train_end: ]
     mean, std = np.mean(data_train, axis=0), np.std(data_train, axis=0)
     data_train_norm = (data_train - mean) / std  # 标准化
 
     train_x, train_y = [], []  # 训练集
-    y_col_num = 7
-    iter_end = len(data_train_norm) - input_len - output_len
+    iter_end = len(data_train_norm) - max(input_len, output_len)
     X, Y = data_train_norm[:, : y_col_num], data_train_norm[:, y_col_num]
     for i in range(iter_end):
         x = X[i: i + input_len]
@@ -45,26 +35,59 @@ def get_train_data(input_len=20, output_len=1, train_begin=0, train_end=5800, tr
         train_x.append(x.copy())
         train_y.append(y.copy())
 
+    train_x = np.array(train_x)
+    train_y = np.array(train_y)
     return mean, std, train_x, train_y
 
 
-# 获取测试集
-def get_test_data(input_len=20, test_begin=5800):
-    data_test = data[test_begin:]
-    mean = np.mean(data_test, axis=0)
-    std = np.std(data_test, axis=0)
-    normalized_test_data = (data_test - mean) / std  # 标准化
-    size = (len(normalized_test_data) + input_len - 1) // input_len  # 有size个sample
-    test_x, test_y = [], []
-    for i in range(size - 1):
-        x = normalized_test_data[i * input_len:(i + 1) * input_len, :7]
-        y = normalized_test_data[i * input_len:(i + 1) * input_len, 7]
-        test_x.append(x.tolist())
-        test_y.extend(y)
-    test_x.append((normalized_test_data[(i + 1) * input_len:, :7]).tolist())
-    test_y.extend((normalized_test_data[(i + 1) * input_len:, 7]).tolist())
-    return mean, std, test_x, test_y
+def get_data(x, y, train_ratio=0.7):
+    total_len = len(data)
+    train_len = int(total_len * train_ratio)
+    x_train, x_test = x[: train_len], x[train_len: ]
+    y_train, y_test = y[: train_len], y[train_len: ]
+    return x_train, x_test, y_train, y_test
 
+
+def rolling_standardize(arr, window=5):
+    """
+    Assume first axis is rolling axis.
+
+    """
+    df = pd.DataFrame(arr)
+    if window == 0:
+        mean, std = arr.mean(axis=0), arr.std(axis=0)
+    else:
+        roll = df.rolling(window=window, axis=0)
+        mean, std = roll.mean(), roll.std()
+        mean, std = mean.values, std.values
+    df_std = (df - mean) / std
+    df_std = df_std.iloc[window: ]
+    arr_std = df_std.values
+    return arr_std, mean[window: ], std[window: ]
+
+
+def ts2sample(ts, window=10, stride=1):
+    """
+
+    Parameters
+    ------
+    ts : np.ndarray
+        of shape [ts_len, ...]
+
+    Returns
+    -------
+    res : np.ndarray
+        of shape [n_samples, window, ...]
+
+    """
+    samples = []
+    ts_len = len(ts)
+    for start in range(0, ts_len - window, stride):
+        end = start + window
+        sample = ts[start: end]
+        samples.append(sample[np.newaxis])
+    res = np.vstack(samples)
+    return res
 
 # ——————————————————定义神经网络变量——————————————————
 def lstm(X):
@@ -76,7 +99,6 @@ def lstm(X):
     """
     X_shape = X.get_shape()
     batch_size = BATCH_SIZE
-    time_step = X_shape[1].value
     w_in = weights['in']
     b_in = biases['in']
     w_in = tf.tile(tf.expand_dims(w_in, 0), [batch_size, 1, 1])
@@ -96,49 +118,51 @@ def lstm(X):
 
 
 # ——————————————————训练模型——————————————————
-def train_lstm(batch_size=77, input_len=15, output_len=1, train_begin=2000, train_end=5800):
+def train_lstm(x_train, y_train,
+               batch_size=77,
+               input_len=15, output_len=1,
+               train_begin=2000, train_end=5800,
+               n_epoch=1000):
     X = tf.placeholder(tf.float32, shape=[batch_size, input_len, INPUT_SIZE])
     Y = tf.placeholder(tf.float32, shape=[batch_size, output_len, OUTPUT_SIZE])
-    _, _, train_x, train_y = get_train_data(input_len, output_len, train_begin, train_end)
+    # _, _, train_x, train_y = get_train_data(input_len, output_len, train_begin, train_end)
     pred, _ = lstm(X)
     loss = tf.reduce_mean(tf.square(tf.reshape(pred, [-1]) - tf.reshape(Y, [-1])))
     train_op = tf.train.RMSPropOptimizer(lr).minimize(loss)
 
     # Create model saver and Set dir
-    saver = tf.train.Saver(tf.global_variables(), max_to_keep=15)
+    saver = tf.train.Saver(tf.global_variables(), max_to_keep=4)
     # get latest checkpoint file name
     module_file = tf.train.latest_checkpoint(CKPT_DIR)
 
     with tf.Session() as sess:
-        # initialize global variables
-        sess.run(tf.global_variables_initializer())
-
-        # restore latestest checkpoint
         if module_file is not None:
+            # restore latestest checkpoint
             saver.restore(sess, module_file)
+        else:
+            # initialize global variables
+            sess.run(tf.global_variables_initializer())
 
         # Continue to train from latest checkpoint
-        for i in range(2001):
-            train_len = len(train_x)
+        for epoch in range(n_epoch):
+            train_len = len(x_train)
             for start, end in zip(range(0,          train_len, batch_size),
                                   range(batch_size, train_len, batch_size)):
                 _, loss_ = sess.run(fetches=[train_op, loss],
-                                    feed_dict={X: train_x[start: end],
-                                               Y: train_y[start: end]})
+                                    feed_dict={X: x_train[start: end],
+                                               Y: y_train[start: end]})
 
-            print(i, loss_)
+            print(epoch, loss_)
 
-            if i % 200 == 0:
-                saved_file = saver.save(sess, CKPT_DIR + '\stock2.model', global_step=i)
+            if epoch % 200 == 0:
+                saved_file = saver.save(sess, CKPT_DIR + '\stock2.model', global_step=epoch)
                 print("保存模型：", saved_file)
 
 
 # ————————————————预测模型————————————————————
-def prediction(input_len=20):
+def prediction(x_test, y_test, input_len=20):
     X = tf.placeholder(tf.float32, shape=[BATCH_SIZE, input_len, INPUT_SIZE])
-    # Y=tf.placeholder(tf.float32, shape=[None,time_step,output_size])
-    # mean, std, test_x, test_y = get_test_data(input_len)
-    mean, std, test_x, test_y = get_train_data(input_len=input_len, output_len=OUTPUT_LEN, train_begin=5800, train_mode=False)
+    # mean, std, test_x, test_y = get_train_data(input_len=input_len, output_len=OUTPUT_LEN, train_mode=False)
     pred, _ = lstm(X)
     saver = tf.train.Saver(tf.global_variables())
     with tf.Session() as sess:
@@ -149,47 +173,69 @@ def prediction(input_len=20):
             print("module_file resotred.")
 
         test_predict = []
-        test_len = len(test_x)
+        test_len = len(x_test)
+        start, end = 0, 0
         for start, end in zip(range(0,          test_len, BATCH_SIZE),
                               range(BATCH_SIZE, test_len, BATCH_SIZE)):
         # for step in range(len(test_x) - 1):
-            prob = sess.run(pred, feed_dict={X: test_x[start: end]})
+            prob = sess.run(pred, feed_dict={X: x_test[start: end]})
             predict = prob.reshape((-1))
             test_predict.extend(predict)
 
-        test_y = np.squeeze(test_y)
-        test_y = test_y[: end]
-        assert len(test_y) == len(test_predict)
-        n = len(test_y)
+    return test_predict
 
-        test_y = test_y * std[7] + mean[7]
-        test_predict = np.array(test_predict) * std[7] + mean[7]
-
-        rsq = calc_rsq(test_y, test_predict)
-        print("rsq = {:.5f}".format(rsq))
-
-        acc = np.average(np.abs(test_predict - test_y[:len(test_predict)]) / test_y[:len(test_predict)])  # 偏差
-        # 以折线图表示结果
-        plt.figure()
-        plt.plot(list(range(n)), test_predict, color='b')
-        plt.plot(list(range(n)), test_y, color='r')
-        plt.show()
 
 
 if __name__ == "__main__":
+    # checkpoint dir
+    # CKPT_DIR = 'checkpoints_no_rolling'
+    CKPT_DIR = 'checkpoints'
+
+    # 定义常量
+    rnn_unit = 10  # hidden layer units
+    INPUT_SIZE = 5  # 与之后读入的df有关
+    OUTPUT_SIZE = 1
+    INPUT_LEN = 15
+    OUTPUT_LEN = 1
+    BATCH_SIZE = 77
+    lr = 0.0006  # 学习率
+
     # ——————————————————导入数据——————————————————————
-    df = pd.read_csv('dataset/dataset_2.csv')  # 读入股票数据
-    # store = pd.HDFStore('train_test_dataset', mode='r')
-    # data = store['dataset']
-    # store.close()
-    # store = pd.HDFStore('data/train_test_dataset', mode='r')
-    # data = store['dataset']
-    # store.close()
-    # shift_len = -(INPUT_LEN - 1 )
-    shift_len = -(INPUT_LEN - 1 )
-    df.loc[:, 'label'] = df['label'].shift(shift_len)  # -1
+    df = pd.read_csv('Archive/futures-historical-data/rb1505_300.csv',
+                     usecols=[3, 4, 5, 6, 7, 6])
+    df = df.reindex(columns=['open', 'high', 'low', 'close', 'volume'])
+    df.loc[:, 'label'] = df['close']
+
+    shift_len = -(INPUT_LEN + 1)
+    y_col_num = 5
+    df.iloc[:, y_col_num] = df.iloc[:, y_col_num].shift(shift_len)  # -1
+
     data = df.dropna()
-    data = data.iloc[:, 2:10].values  # 取第3-10
+    data = data.values
+
+    # split x y and train, test
+    data_x = data[:, :-1]
+    data_y = data[:, [-1]]
+    x_train, x_test, y_train, y_test = get_data(data_x, data_y, train_ratio=0.7)
+
+    # rolling standardization
+    ROLL_WINDOW = 50
+    print(x_train.shape, y_train.shape)
+    x_train, _, _ = rolling_standardize(x_train, window=ROLL_WINDOW)
+    x_test, _, _ = rolling_standardize(x_test, window=ROLL_WINDOW)
+    y_train, _, _ = rolling_standardize(y_train, window=ROLL_WINDOW)
+    y_test_std, mean_y_test, std_y_test = rolling_standardize(y_test, window=ROLL_WINDOW)
+    print(x_train.shape, y_train.shape)
+
+    # INPUT_LEN > OUTPUT_LEN
+    x_train = ts2sample(x_train, INPUT_LEN, stride=1)
+    x_test = ts2sample(x_test, INPUT_LEN, stride=1)
+    y_train = ts2sample(y_train, INPUT_LEN, stride=1)
+    y_test_std = ts2sample(y_test_std, INPUT_LEN, stride=1)
+    y_train = y_train[:, [-OUTPUT_LEN]]
+    y_test_std = y_test_std[:, [-OUTPUT_LEN]]
+
+    TOTAL_LEN = len(data)
 
     # ——————————————————定义神经网络变量——————————————————
     # 输入层、输出层权重、偏置
@@ -205,7 +251,27 @@ if __name__ == "__main__":
 
     train_mode = 0
     if train_mode:
-        train_lstm(batch_size=BATCH_SIZE, input_len=INPUT_LEN)
+        train_lstm(x_train, y_train,
+                   batch_size=BATCH_SIZE,
+                   input_len=INPUT_LEN, output_len=1,
+                   n_epoch=10000
+                   )
     else:
-        prediction(INPUT_LEN)
+        y_pred = prediction(x_test, y_test_std, INPUT_LEN)
+        y_pred = np.squeeze(y_pred)
+        y_test = np.squeeze(y_test)
+        n = len(y_pred)
+        y_test = y_test[: n]
+
+        y_pred = y_pred * np.squeeze(std_y_test[: n]) + np.squeeze(mean_y_test[: n])
+
+        rsq = calc_rsq(y_test, y_pred)
+        print("rsq = {:.5f}".format(rsq))
+
+        acc = np.average(np.abs(y_pred - y_test) / y_test)  # 偏差
+        # 以折线图表示结果
+        plt.figure()
+        plt.plot(list(range(n)), y_pred, color='b')
+        plt.plot(list(range(n)), y_test, color='r')
+        plt.show()
 
