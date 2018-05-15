@@ -106,7 +106,7 @@ def lstm(X):
     input = X
     input_rnn = tf.matmul(input, w_in) + b_in
     # input_rnn = tf.reshape(input_rnn, [-1, time_step, rnn_unit])  # 将tensor转成3维，作为lstm cell的输入 TODO
-    cell = tf.nn.rnn_cell.BasicLSTMCell(rnn_unit)  # TODO forget bias
+    cell = tf.nn.rnn_cell.BasicLSTMCell(rnn_unit)
     init_state = cell.zero_state(batch_size, dtype=tf.float32)
     output_rnn, final_states = tf.nn.dynamic_rnn(cell, input_rnn, initial_state=init_state,
                                                  dtype=tf.float32)  # output_rnn是记录lstm每个输出节点的结果，final_states是最后一个cell的结果
@@ -189,11 +189,10 @@ def prediction(x_test, y_test, input_len=20):
 if __name__ == "__main__":
     # checkpoint dir
     # CKPT_DIR = 'checkpoints_no_rolling'
-    CKPT_DIR = 'checkpoints'
+    CKPT_DIR = 'checkpoints_return'
 
     # 定义常量
-    rnn_unit = 10  # hidden layer units
-    INPUT_SIZE = 5  # 与之后读入的df有关
+    rnn_unit = 20  # hidden layer units
     OUTPUT_SIZE = 1
     INPUT_LEN = 15
     OUTPUT_LEN = 1
@@ -204,14 +203,17 @@ if __name__ == "__main__":
     df = pd.read_csv('Archive/futures-historical-data/rb1505_300.csv',
                      usecols=[3, 4, 5, 6, 7, 6])
     df = df.reindex(columns=['open', 'high', 'low', 'close', 'volume'])
-    df.loc[:, 'label'] = df['close']
 
-    shift_len = -(INPUT_LEN + 1)
-    y_col_num = 5
-    df.iloc[:, y_col_num] = df.iloc[:, y_col_num].shift(shift_len)  # -1
+    shift_len = INPUT_LEN + 1
+    df.loc[:, 'label'] = df['close'].shift(shift_len)  # -1
+    df.loc[:, 'rtn'] = df['close'].pct_change(shift_len)
+    df.loc[:, 'label'] = df['close'].pct_change(1).shift(-shift_len)  # -1
+
 
     data = df.dropna()
     data = data.values
+
+    INPUT_SIZE = data.shape[1] - 1  # 与之后读入的df有关
 
     # split x y and train, test
     data_x = data[:, :-1]
@@ -223,8 +225,9 @@ if __name__ == "__main__":
     print(x_train.shape, y_train.shape)
     x_train, _, _ = rolling_standardize(x_train, window=ROLL_WINDOW)
     x_test, _, _ = rolling_standardize(x_test, window=ROLL_WINDOW)
-    y_train, _, _ = rolling_standardize(y_train, window=ROLL_WINDOW)
-    y_test_std, mean_y_test, std_y_test = rolling_standardize(y_test, window=ROLL_WINDOW)
+    # y_train, _, _ = rolling_standardize(y_train, window=ROLL_WINDOW)
+    # y_test_std, mean_y_test, std_y_test = rolling_standardize(y_test, window=ROLL_WINDOW)
+    y_test_std, mean_y_test, std_y_test = y_test, 0, 1
     print(x_train.shape, y_train.shape)
 
     # INPUT_LEN > OUTPUT_LEN
@@ -249,7 +252,7 @@ if __name__ == "__main__":
         'out': tf.Variable(tf.constant(0.1, shape=[1, ]))
     }
 
-    train_mode = 0
+    train_mode = 1
     if train_mode:
         train_lstm(x_train, y_train,
                    batch_size=BATCH_SIZE,
@@ -257,21 +260,33 @@ if __name__ == "__main__":
                    n_epoch=10000
                    )
     else:
-        y_pred = prediction(x_test, y_test_std, INPUT_LEN)
+        # y_pred = prediction(x_test, y_test_std, INPUT_LEN)
+        y_pred = prediction(x_train, y_train, INPUT_LEN)
         y_pred = np.squeeze(y_pred)
-        y_test = np.squeeze(y_test)
+        # y_test = np.squeeze(y_test)
+        y_test = np.squeeze(y_train)
         n = len(y_pred)
         y_test = y_test[: n]
 
-        y_pred = y_pred * np.squeeze(std_y_test[: n]) + np.squeeze(mean_y_test[: n])
+        # y_pred = y_pred * np.squeeze(std_y_test[: n]) + np.squeeze(mean_y_test[: n])
+        y_pred = y_pred * std_y_test + mean_y_test
+        def calc_return(x, window):
+            return x[window: ] / x[: -window] - 1
+        FORWARD_LEN = abs(shift_len)
+        rtn = calc_return(y_test, FORWARD_LEN)
+        rtn_pred = calc_return(y_pred, FORWARD_LEN)
 
-        rsq = calc_rsq(y_test, y_pred)
-        print("rsq = {:.5f}".format(rsq))
+        def show_rsq(y, yhat, title):
+            rsq = calc_rsq(y, yhat)
+            #print("rsq = {:.5f}".format(rsq))
+            plt.figure()
+            plt.scatter(y, yhat)
+            plt.title("{:s} (rsq = {:.3f}%)".format(title, rsq*100))
+            plt.show()
+            #plt.savefig("{:s}.png".format(title))
+            #plt.close()
+
+        show_rsq(rtn, rtn_pred, "return_true v.s. return_pred")
+        show_rsq(y_test, y_pred, "close_true v.s. close_pred")
 
         acc = np.average(np.abs(y_pred - y_test) / y_test)  # 偏差
-        # 以折线图表示结果
-        plt.figure()
-        plt.plot(list(range(n)), y_pred, color='b')
-        plt.plot(list(range(n)), y_test, color='r')
-        plt.show()
-
