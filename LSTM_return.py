@@ -1,20 +1,28 @@
-from keras.models import Sequential
-from keras.layers import SimpleRNN, Dense, LSTM, GRU
-from keras.utils.np_utils import to_categorical
+# encoding: utf-8
+
+import gpu_config
 import numpy as np
 import pandas as pd
-
+import keras
+from keras.layers import Dense, LSTM
+from keras.models import Sequential
+from keras.callbacks import ModelCheckpoint
+from keras.utils.np_utils import to_categorical
 
 
 def calc_rsq(y, yhat):
     ret = 1 - ((y - yhat) ** 2).mean() / y.var()
     return ret
+
+
 def get_data(x, y, train_ratio=0.7):
     total_len = len(data)
     train_len = int(total_len * train_ratio)
-    x_train, x_test = x[: train_len], x[train_len: ]
-    y_train, y_test = y[: train_len], y[train_len: ]
+    x_train, x_test = x[: train_len], x[train_len:]
+    y_train, y_test = y[: train_len], y[train_len:]
     return x_train, x_test, y_train, y_test
+
+
 def rolling_standardize(arr, window=5):
     """
     Assume first axis is rolling axis.
@@ -28,9 +36,11 @@ def rolling_standardize(arr, window=5):
         mean, std = roll.mean(), roll.std()
         mean, std = mean.values, std.values
     df_std = (df - mean) / std
-    df_std = df_std.iloc[window: ]
+    df_std = df_std.iloc[window:]
     arr_std = df_std.values
-    return arr_std, mean[window: ], std[window: ]
+    return arr_std, mean[window:], std[window:]
+
+
 def ts2sample(ts, window=10, stride=1):
     """
 
@@ -56,58 +66,15 @@ def ts2sample(ts, window=10, stride=1):
 
 
 if __name__ == "__main__":
+    import pickle
 
     time_step = 80
-    Epochs = 750
-    BatchSize = 80
+    Epochs = 1000
+    BatchSize = 10 
     OUTPUT_DIM = 1
     time_step_out = 1
     n_classes = 3
-    """
-        ##导入数据
-        df = pd.read_csv('Archive/futures-historical-data/rb1505_300.csv',
-                         usecols=[3, 4, 5, 6, 7, 6])
-        df = df.reindex(columns=['open', 'high', 'low', 'close', 'volume'])
-        # TODO 导入热卷轧
-        shift_len = time_step
-        df.loc[:, 'rtn'] = df['close']
-        df.loc[:, 'rtn'] = df['rtn'].pct_change(1)
-        df.loc[:, 'label'] = df['rtn']
-        df.loc[:, 'label'] = df['label'].shift(-shift_len)
 
-        data = df.dropna()
-        data = data.values
-
-        INPUT_DIM = data.shape[1] - 1
-
-        # split x y and train, test
-        data_x = data[:, :-1]
-        data_y = data[:, [-1]]
-        x_train, x_test, y_train, y_test = get_data(data_x, data_y, train_ratio=0.7)
-
-        # rolling standardization
-        ROLL_WINDOW = 50
-        print(x_train.shape, y_train.shape)
-        x_train, _, _ = rolling_standardize(x_train, window=ROLL_WINDOW)
-        x_test, _, _ = rolling_standardize(x_test, window=ROLL_WINDOW)
-        y_train, _, _ = rolling_standardize(y_train, window=ROLL_WINDOW)
-        y_test, mean_y_test, std_y_test = rolling_standardize(y_test, window=ROLL_WINDOW)
-        #y_test_std, mean_y_test, std_y_test = y_test, 0, 1
-        print(x_train.shape, y_train.shape)
-
-        # INPUT_LEN > OUTPUT_LEN
-        x_train = ts2sample(x_train, time_step, stride=1)
-        x_test = ts2sample(x_test, time_step, stride=1)
-        y_train = ts2sample(y_train, time_step, stride=1)
-        y_test = ts2sample(y_test, time_step, stride=1)
-        #y_test_std = ts2sample(y_test_std, time_step, stride=1)
-
-        y_train = y_train[:, [-time_step_out]]
-        y_test = y_test[:, [-time_step_out]]
-
-        TOTAL_LEN = len(data)
-
-    """
 
     # 导入数据
     x_train = np.load('Archive/futures-historical-data/rb_X_train_1501-1701.npy')
@@ -115,9 +82,13 @@ if __name__ == "__main__":
     y_train = np.load('Archive/futures-historical-data/rb_Y_train_1501-1701.npy')
     y_test = np.load('Archive/futures-historical-data/rb_Y_test_1501-1701.npy')
 
+    print(x_test.shape, y_test.shape)
+
     # test with minimal data size
-    x_train = x_train[:1000]
-    y_train = y_train[:1000]
+    n_cut = 100
+    if n_cut > 0:
+        x_train = x_train[:n_cut]
+        y_train = y_train[:n_cut]
 
     y_train = y_train[:, 0]  # dicard time step dimension (which is 1)
     y_test = y_test[:, 0]  # dicard time step dimension (which is 1)
@@ -125,30 +96,26 @@ if __name__ == "__main__":
     y_test = to_categorical(y_test, num_classes=3)
     INPUT_DIM = x_train.shape[2]
 
-    #建立网络
+    # 建立网络
+    penalty_c = 0.001
     model = Sequential()
-    model.add(LSTM(units=INPUT_DIM*5,
+    model.add(LSTM(units=128,
                    return_sequences=True,
                    input_shape=(time_step, INPUT_DIM),
                    kernel_initializer='Orthogonal',
-                   unit_forget_bias=True
+                   unit_forget_bias=True,
+                   #kernel_regularizer=keras.regularizers.l2(penalty_c),
                    )
               )
-    model.add(LSTM(units=INPUT_DIM*3,
-                   return_sequences=True,
+    model.add(keras.layers.core.Dropout(0.5))
+    model.add(LSTM(units=128,
                    input_shape=(time_step, INPUT_DIM),
                    kernel_initializer='Orthogonal',
-                   unit_forget_bias=True)
+                   unit_forget_bias=True,
+                   #kernel_regularizer=keras.regularizers.l2(penalty_c),
+                   )
               )
-    model.add(LSTM(units=INPUT_DIM,
-                   input_shape=(time_step,INPUT_DIM),
-                   kernel_initializer='Orthogonal',
-                   unit_forget_bias=True)
-              )
-    #model.add(Dense(units=INPUT_DIM,
-     #               activation='tanh',
-      #              kernel_initializer='RandomNormal')
-       #       )
+    model.add(keras.layers.core.Dropout(0.5))
     model.add(Dense(units=n_classes * 3)
               )
 
@@ -161,21 +128,39 @@ if __name__ == "__main__":
                   metrics=['accuracy']
                   )
 
-    # test
-    # y_pred = model.predict(x_test[:10], batch_size=1)
+    batch_size_eval = 100
+    # evaluate before fit
+    metric_test = model.evaluate(x=x_test, y=y_test, batch_size=batch_size_eval, verbose=0)
+    print(metric_test)
 
-    #y_train = y_train[:, :, 0]  #将y转换成2D
+    #filepath="weights-improvement-{epoch:02d}-{val_acc:.2f}.hdf5"
+    #checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+    #callback_list = [checkpoint]
     history = model.fit(x=x_train,
                         y=y_train,
+                        validation_data=(x_test, y_test),
                         batch_size=BatchSize,
                         epochs=Epochs)
-    loss_train = model.evaluate(x=x_train, y=y_train, batch_size= 1)
-    print(loss_train)
-    #y_test = y_test[:, :, 0]  #将y转换成2D
-    y_pred = model.predict(x_test, batch_size=BatchSize)
-    loss_pre = model.evaluate(x=x_test, y=y_pred, batch_size=1)
-    print(loss_pre)
+                       # callbacks=callback_list)
 
-    from stock_predict_2 import calc_rsq
-    rsq = calc_rsq(y_test.squeeze(), y_pred.squeeze())
-    print(rsq)
+    to_dump = {'history': history.history,
+               'params': history.params,
+               'epoch': history.epoch}
+    with open('train_history.pkl', mode='wb') as f:
+        pickle.dump(to_dump, f, pickle.HIGHEST_PROTOCOL)
+
+    # serialize model to JSON
+    model_json = model.to_json()
+    with open("model.json", "w") as json_file:
+        json_file.write(model_json)
+    # serialize weights to HDF5
+    model.save_weights("model_weights.h5")
+    print("Saved model to disk")
+
+    metric_train = model.evaluate(x=x_train, y=y_train, batch_size=batch_size_eval, verbose=0)
+    print("Train eval result: ", metric_train)
+
+    metric_test = model.evaluate(x=x_test, y=y_test, batch_size=batch_size_eval, verbose=0)
+    with open('test_metric.pkl', mode='wb') as f:
+        pickle.dump(metric_test, f, pickle.HIGHEST_PROTOCOL)
+    print("Test eval result: ", metric_test)
