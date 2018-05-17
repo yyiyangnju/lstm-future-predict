@@ -84,9 +84,9 @@ for index in range(len(input_files)):
                      usecols=[3, 4, 5, 6, 7, 6])
     df = df.reindex(columns=['open', 'high', 'low', 'close', 'volume'])
 
-    shift_len = time_step
+    shift_len = 1
     df.loc[:, 'rtn'] = df['close']
-    df.loc[:, 'rtn'] = df['rtn'].pct_change(1)
+    df.loc[:, 'rtn'] = df['rtn'].pct_change(shift_len)
 
 
     def label_return(r):

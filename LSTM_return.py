@@ -1,6 +1,6 @@
 # encoding: utf-8
 
-import gpu_config
+#import gpu_config
 import numpy as np
 import pandas as pd
 import keras
@@ -70,7 +70,7 @@ if __name__ == "__main__":
 
     time_step = 80
     Epochs = 1000
-    BatchSize = 10 
+    BatchSize = 32
     OUTPUT_DIM = 1
     time_step_out = 1
     n_classes = 3
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     print(x_test.shape, y_test.shape)
 
     # test with minimal data size
-    n_cut = 100
+    n_cut = 0
     if n_cut > 0:
         x_train = x_train[:n_cut]
         y_train = y_train[:n_cut]
@@ -123,6 +123,7 @@ if __name__ == "__main__":
                     activation='softmax',
                     )
               )
+#    adam =
     model.compile(optimizer='Adam',
                   loss='categorical_crossentropy',
                   metrics=['accuracy']
