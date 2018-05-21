@@ -3,11 +3,11 @@
 #import gpu_config
 import numpy as np
 import pandas as pd
-import keras
+from keras import optimizers
 from keras.layers import Dense, LSTM
 from keras.models import Sequential
-from keras.callbacks import ModelCheckpoint
 from keras.utils.np_utils import to_categorical
+import keras
 
 
 def calc_rsq(y, yhat):
@@ -65,22 +65,25 @@ def ts2sample(ts, window=10, stride=1):
     return res
 
 
-if __name__ == "__main__":
-    import pickle
-
-    time_step = 80
-    Epochs = 1000
-    BatchSize = 32
+def main():
+    time_step =80
+    Epochs = 6
+    BatchSize =128
     OUTPUT_DIM = 1
     time_step_out = 1
-    n_classes = 3
+    n_classes = 2
 
 
     # 导入数据
-    x_train = np.load('Archive/futures-historical-data/rb_X_train_1501-1701.npy')
-    x_test = np.load('Archive/futures-historical-data/rb_X_test_1501-1701.npy')
-    y_train = np.load('Archive/futures-historical-data/rb_Y_train_1501-1701.npy')
-    y_test = np.load('Archive/futures-historical-data/rb_Y_test_1501-1701.npy')
+    x_train = np.load('Archive/futures-historical-data/rb_X_train_1501-1605.npy')
+    x_test = np.load('Archive/futures-historical-data/rb_X_test_1501-1605.npy')
+    y_train = np.load('Archive/futures-historical-data/rb_Y_train_1501-1605.npy')
+    y_test = np.load('Archive/futures-historical-data/rb_Y_test_1501-1605.npy')
+    y_test_index = np.load('Archive/futures-historical-data/rb_Y_test_index_1501-1605.npy')
+    y_test_index = pd.DataFrame(y_test_index[:, 0, :])
+    y_test_index.columns = ['date', 'time']
+
+    assert len(y_test) == len(y_test_index)
 
     print(x_test.shape, y_test.shape)
 
@@ -92,44 +95,73 @@ if __name__ == "__main__":
 
     y_train = y_train[:, 0]  # dicard time step dimension (which is 1)
     y_test = y_test[:, 0]  # dicard time step dimension (which is 1)
-    y_train = to_categorical(y_train, num_classes=3)
-    y_test = to_categorical(y_test, num_classes=3)
+    y_train = to_categorical(y_train, num_classes=n_classes)
+    y_test = to_categorical(y_test, num_classes=n_classes)
     INPUT_DIM = x_train.shape[2]
 
     # 建立网络
     penalty_c = 0.001
     model = Sequential()
-    model.add(LSTM(units=128,
+    model.add(LSTM(units=12,
                    return_sequences=True,
-                   input_shape=(time_step, INPUT_DIM),
                    kernel_initializer='Orthogonal',
-                   unit_forget_bias=True,
-                   #kernel_regularizer=keras.regularizers.l2(penalty_c),
-                   )
-              )
-    model.add(keras.layers.core.Dropout(0.5))
-    model.add(LSTM(units=128,
+                   recurrent_initializer='Orthogonal',
                    input_shape=(time_step, INPUT_DIM),
-                   kernel_initializer='Orthogonal',
-                   unit_forget_bias=True,
-                   #kernel_regularizer=keras.regularizers.l2(penalty_c),
+                   recurrent_dropout=0.5,
+                   kernel_regularizer=keras.regularizers.l2(penalty_c)
                    )
-              )
-    model.add(keras.layers.core.Dropout(0.5))
-    model.add(Dense(units=n_classes * 3)
+              #merge_mode='sum'
               )
 
+    model.add(LSTM(units=12,
+                   return_sequences=True,
+                   kernel_initializer='Orthogonal',
+                   recurrent_initializer='Orthogonal',
+                   input_shape=(time_step, INPUT_DIM),
+                   recurrent_dropout=0.5,
+                   kernel_regularizer=keras.regularizers.l2(penalty_c)
+                   )
+              #merge_mode='sum'
+              )
+    model.add(LSTM(units=12,
+                   input_shape=(time_step, INPUT_DIM),
+                   recurrent_dropout=0.5,
+                   kernel_regularizer=keras.regularizers.l2(penalty_c)
+                   )
+              )
+    model.add(Dense(units=6, activation='relu')
+              )
+
+    # model.add(keras.layers.core.Dropout(0.5))
     model.add(Dense(units=n_classes,
                     activation='softmax',
                     )
               )
-#    adam =
-    model.compile(optimizer='Adam',
+    adam = optimizers.Adam(lr=0.001, decay=0.0)
+    model.compile(optimizer=adam,
                   loss='categorical_crossentropy',
                   metrics=['accuracy']
                   )
 
-    batch_size_eval = 100
+    batch_size_eval = 128
+
+    mode = 'train'
+    if mode == 'predict':
+        pred = model.predict(x=x_test, batch_size=batch_size_eval, verbose=1)
+        print(pred)
+        y_pred = np.argmax(pred, axis=1)
+        assert len(y_pred) == len(y_test_index)
+        res = pd.concat([y_test_index,
+                         pd.DataFrame(data={'y_pred': y_pred})],
+                        axis=1)
+        res.to_hdf('y_pred.hd5', key='y_pred')
+        return
+    elif mode == 'evaluate':
+        # evaluate before fit
+        metric_test = model.evaluate(x=x_test, y=y_test, batch_size=batch_size_eval, verbose=0)
+        print(metric_test)
+        return
+
     # evaluate before fit
     metric_test = model.evaluate(x=x_test, y=y_test, batch_size=batch_size_eval, verbose=0)
     print(metric_test)
@@ -142,7 +174,7 @@ if __name__ == "__main__":
                         validation_data=(x_test, y_test),
                         batch_size=BatchSize,
                         epochs=Epochs)
-                       # callbacks=callback_list)
+    # callbacks=callback_list)
 
     to_dump = {'history': history.history,
                'params': history.params,
@@ -165,3 +197,18 @@ if __name__ == "__main__":
     with open('test_metric.pkl', mode='wb') as f:
         pickle.dump(metric_test, f, pickle.HIGHEST_PROTOCOL)
     print("Test eval result: ", metric_test)
+
+    pred = model.predict(x=x_test, batch_size=batch_size_eval, verbose=1)
+    print(pred)
+    y_pred = np.argmax(pred, axis=1)
+    assert len(y_pred) == len(y_test_index)
+    res = pd.concat([y_test_index,
+                     pd.DataFrame(data={'y_pred': y_pred})],
+                    axis=1)
+    res.to_hdf('y_pred.hd5', key='y_pred')
+
+
+if __name__ == "__main__":
+    import pickle
+
+    main()
